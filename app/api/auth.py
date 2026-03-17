@@ -56,7 +56,7 @@ def _slugify(name: str) -> str:
 async def signup(req: SignupRequest, db: AsyncSession = Depends(get_db)):
     existing = await db.execute(select(User).where(User.email == req.email))
     if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="Email already registered")
+        raise HTTPException(status_code=409, detail="An account with this email already exists. Please sign in.")
 
     slug = _slugify(req.tenant_name)
     existing_tenant = await db.execute(select(Tenant).where(Tenant.slug == slug))
@@ -87,10 +87,12 @@ async def signup(req: SignupRequest, db: AsyncSession = Depends(get_db)):
 
 @router.post("/login")
 async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == req.email))
+    result = await db.execute(select(User).where(User.email == req.email.lower()))
     user = result.scalar_one_or_none()
-    if not user or not verify_password(req.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if not user:
+        raise HTTPException(status_code=404, detail="User does not exist. Please sign up first.")
+    if not verify_password(req.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Incorrect password. Please try again.")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account is deactivated")
 
