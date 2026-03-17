@@ -68,6 +68,10 @@ Generate comprehensive tests using {'pytest' if language == 'python' else 'jest'
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         )
+        if response is None or response.content is None or len(response.content) == 0:
+            print(f"[AI TestGen] Empty response for {rel_path}")
+            return None
+
         test_code = response.content[0].text.strip()
         if test_code.startswith("```"):
             lines = test_code.split("\n")
@@ -133,6 +137,10 @@ DESCRIPTION: <2-3 sentence description of root cause and fix>"""
             max_tokens=1024,
             messages=[{"role": "user", "content": prompt}],
         )
+        if response is None or response.content is None or len(response.content) == 0:
+            print("[AI TestGen] Empty response for failure analysis")
+            return None
+
         text = response.content[0].text.strip()
         title, severity, description = "", Severity.MEDIUM, ""
         for line in text.split("\n"):

@@ -70,13 +70,17 @@ async def list_scans(current: dict = Depends(get_current_tenant)):
         if in_mem:
             scans.append(in_mem.summary)
         else:
+            try:
+                summary = json.loads(r.summary_json) if r.summary_json else None
+            except (json.JSONDecodeError, TypeError):
+                summary = None
             scans.append({
                 "scan_id": r.id,
                 "repo_url": r.repo_url,
                 "status": r.status,
                 "started_at": r.created_at.isoformat() if r.created_at else None,
                 "completed_at": r.completed_at.isoformat() if r.completed_at else None,
-                "summary": json.loads(r.summary_json) if r.summary_json else None,
+                "summary": summary,
             })
     return {"scans": scans}
 
@@ -108,15 +112,23 @@ async def get_scan_status(scan_id: str, current: dict = Depends(get_current_tena
             "error": scan.error,
         }
 
-    # Fall back to DB
+    # Fall back to DB — parse JSON safely
+    def _safe_json(val, default):
+        if not val:
+            return default
+        try:
+            return json.loads(val)
+        except (json.JSONDecodeError, TypeError):
+            return default
+
     return {
         "scan_id": scan_id,
         "status": record.status,
-        "summary": json.loads(record.summary_json) if record.summary_json else None,
-        "issues": json.loads(record.issues_json) if record.issues_json else [],
+        "summary": _safe_json(record.summary_json, None),
+        "issues": _safe_json(record.issues_json, []),
         "generated_tests": [],
-        "test_results": json.loads(record.test_results_json) if record.test_results_json else [],
-        "bugs_filed": json.loads(record.bugs_filed_json) if record.bugs_filed_json else [],
+        "test_results": _safe_json(record.test_results_json, []),
+        "bugs_filed": _safe_json(record.bugs_filed_json, []),
         "error": record.error,
     }
 
@@ -137,7 +149,12 @@ async def get_scan_summary(scan_id: str, current: dict = Depends(get_current_ten
     if scan:
         return scan.summary
 
-    return json.loads(record.summary_json) if record.summary_json else {"scan_id": scan_id, "status": record.status}
+    if record.summary_json:
+        try:
+            return json.loads(record.summary_json)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return {"scan_id": scan_id, "status": record.status}
 
 
 @router.post("/{scan_id}/file-bugs")
@@ -181,7 +198,10 @@ async def file_bugs_inline(
     filed = await tracker.file_bugs(issues)
 
     # Update scan record
-    existing_filed = json.loads(record.bugs_filed_json) if record.bugs_filed_json else []
+    try:
+        existing_filed = json.loads(record.bugs_filed_json) if record.bugs_filed_json else []
+    except (json.JSONDecodeError, TypeError):
+        existing_filed = []
     existing_filed.extend(filed)
     record.bugs_filed_json = json.dumps(existing_filed)
     await db.commit()
@@ -249,7 +269,10 @@ async def file_bugs_saved(
     filed = await tracker.file_bugs(issues)
 
     # Update scan record
-    existing_filed = json.loads(record.bugs_filed_json) if record.bugs_filed_json else []
+    try:
+        existing_filed = json.loads(record.bugs_filed_json) if record.bugs_filed_json else []
+    except (json.JSONDecodeError, TypeError):
+        existing_filed = []
     existing_filed.extend(filed)
     record.bugs_filed_json = json.dumps(existing_filed)
     await db.commit()
@@ -268,8 +291,11 @@ def _get_issues(scan_id: str, record: ScanRecord) -> list[Issue]:
         return list(scan.issues)
 
     if record.issues_json:
-        raw = json.loads(record.issues_json)
-        return [Issue(**i) for i in raw]
+        try:
+            raw = json.loads(record.issues_json)
+            return [Issue(**i) for i in raw] if raw else []
+        except (json.JSONDecodeError, TypeError):
+            return []
     return []
 
 

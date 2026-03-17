@@ -28,6 +28,14 @@ async def clone_repo(repo_url: str, branch: str, repo_source: RepoSource, scan_i
         raise ValueError(f"Invalid URL for {repo_source.value}: {repo_url}")
 
     await connector.clone(repo_url, branch, dest)
+
+    # Verify clone produced files
+    if not dest.exists() or not dest.is_dir():
+        raise RuntimeError(f"Clone failed: destination {dest} does not exist after clone")
+    contents = list(dest.iterdir())
+    if not contents:
+        raise RuntimeError(f"Clone failed: destination {dest} is empty after clone")
+
     return dest
 
 

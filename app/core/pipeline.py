@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Callable, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,11 +46,15 @@ async def _save_scan_to_db(scan: ScanResult, db: AsyncSession | None, scan_recor
         from app.core.db_models import ScanRecord
         from sqlalchemy import update
 
+        summary_json = json.dumps(scan.summary) if scan.summary else "{}"
+        issues_json = json.dumps([i.model_dump() for i in scan.issues]) if scan.issues else "[]"
+        test_results_json = json.dumps([t.model_dump() for t in scan.test_results]) if scan.test_results else "[]"
+
         values = {
             "status": scan.status.value,
-            "summary_json": json.dumps(scan.summary),
-            "issues_json": json.dumps([i.model_dump() for i in scan.issues]),
-            "test_results_json": json.dumps([t.model_dump() for t in scan.test_results]),
+            "summary_json": summary_json,
+            "issues_json": issues_json,
+            "test_results_json": test_results_json,
             "error": scan.error,
             "completed_at": scan.completed_at,
         }
@@ -72,54 +77,79 @@ async def run_scan(
 
     try:
         # Step 1: Clone
+        print(f"[{scan.scan_id}] Step 1: Cloning repo...")
         scan.status = ScanStatus.CLONING
         await _notify(scan.scan_id, {"status": "cloning", "message": "Cloning repository..."})
         logger.info(f"[{scan.scan_id}] Cloning {request.repo_url}...")
         repo_path = await clone_repo(request.repo_url, request.branch, request.repo_source, scan.scan_id)
 
+        # Verify clone succeeded
+        if repo_path is None or not repo_path.is_dir():
+            raise RuntimeError(f"Clone failed: repo_path is {'None' if repo_path is None else 'not a directory'}")
+        print(f"[{scan.scan_id}] Step 1 complete: Cloned to {repo_path}")
+
         # Step 2: Static Analysis
         if request.run_static_analysis:
+            print(f"[{scan.scan_id}] Step 2: Running static analysis...")
             scan.status = ScanStatus.ANALYZING
             await _notify(scan.scan_id, {"status": "analyzing", "message": "Running static analysis..."})
             logger.info(f"[{scan.scan_id}] Running static analysis...")
             static_issues = await run_static_analysis(repo_path)
-            scan.issues.extend(static_issues)
+            if static_issues is not None:
+                scan.issues.extend(static_issues)
+            else:
+                print(f"[{scan.scan_id}] Warning: static analysis returned None")
             await _notify(scan.scan_id, {
                 "status": "analyzing",
-                "message": f"Found {len(static_issues)} static analysis issues",
-                "issues_count": len(static_issues),
+                "message": f"Found {len(static_issues) if static_issues else 0} static analysis issues",
+                "issues_count": len(static_issues) if static_issues else 0,
             })
+            print(f"[{scan.scan_id}] Step 2 complete: {len(static_issues) if static_issues else 0} issues found")
 
         # Step 3: AI Test Generation
         if request.run_ai_tests:
+            print(f"[{scan.scan_id}] Step 3: Generating AI tests...")
             scan.status = ScanStatus.GENERATING_TESTS
             await _notify(scan.scan_id, {"status": "generating_tests", "message": "Generating AI tests..."})
             logger.info(f"[{scan.scan_id}] Generating AI tests...")
             generated = await generate_tests(repo_path, request.include_patterns, request.exclude_patterns)
-            scan.generated_tests = generated
+            if generated is not None:
+                scan.generated_tests = generated
+            else:
+                generated = []
+                print(f"[{scan.scan_id}] Warning: generate_tests returned None")
             await _notify(scan.scan_id, {
                 "status": "generating_tests",
                 "message": f"Generated {len(generated)} test files",
                 "tests_generated": len(generated),
             })
+            print(f"[{scan.scan_id}] Step 3 complete: {len(generated)} tests generated")
 
             # Step 4: Run Tests
             if generated:
+                print(f"[{scan.scan_id}] Step 4: Running generated tests...")
                 scan.status = ScanStatus.RUNNING_TESTS
                 await _notify(scan.scan_id, {"status": "running_tests", "message": "Running generated tests..."})
                 test_results = await run_generated_tests(repo_path, generated)
-                scan.test_results = test_results
+                if test_results is not None:
+                    scan.test_results = test_results
+                else:
+                    test_results = []
+                    print(f"[{scan.scan_id}] Warning: run_generated_tests returned None")
 
                 failed = [r for r in test_results if not r.passed]
                 if failed:
-                    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-                    for result in failed:
-                        error_text = result.error or result.output
-                        ai_issue = await analyze_failure(client, error_text, "")
-                        if ai_issue:
-                            ai_issue.file_path = result.test_file
-                            ai_issue.source = "test_failure"
-                            scan.issues.append(ai_issue)
+                    try:
+                        client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+                        for result in failed:
+                            error_text = result.error or result.output
+                            ai_issue = await analyze_failure(client, error_text, "")
+                            if ai_issue is not None:
+                                ai_issue.file_path = result.test_file
+                                ai_issue.source = "test_failure"
+                                scan.issues.append(ai_issue)
+                    except Exception as e:
+                        print(f"[{scan.scan_id}] Warning: failure analysis error: {e}")
 
                 await _notify(scan.scan_id, {
                     "status": "running_tests",
@@ -127,6 +157,7 @@ async def run_scan(
                     "tests_passed": sum(1 for r in test_results if r.passed),
                     "tests_failed": len(failed),
                 })
+                print(f"[{scan.scan_id}] Step 4 complete: {sum(1 for r in test_results if r.passed)} passed, {len(failed)} failed")
 
         # Bug filing removed from pipeline — now triggered on-demand via API
 
@@ -137,13 +168,15 @@ async def run_scan(
             "message": "Scan completed",
             "summary": scan.summary,
         })
+        print(f"[{scan.scan_id}] Step 5: Scan complete. {len(scan.issues)} issues found.")
 
     except Exception as e:
         scan.status = ScanStatus.FAILED
         scan.error = str(e)
         scan.completed_at = datetime.now(timezone.utc)
         await _notify(scan.scan_id, {"status": "failed", "message": str(e)})
-        logger.error(f"[{scan.scan_id}] Scan failed: {e}")
+        logger.error(f"[{scan.scan_id}] Scan failed: {e}", exc_info=True)
+        print(f"[{scan.scan_id}] SCAN FAILED: {e}")
     finally:
         cleanup_repo(scan.scan_id)
         unregister_callback(scan.scan_id)
