@@ -13,17 +13,23 @@ TRACKER_MAP: dict[BugTrackerType, type[BugTrackerConnector]] = {
 }
 
 
-def get_tracker(tracker_type: BugTrackerType) -> BugTrackerConnector:
+def get_tracker(
+    tracker_type: BugTrackerType, credentials: dict | None = None
+) -> BugTrackerConnector:
     connector_cls = TRACKER_MAP.get(tracker_type)
     if not connector_cls:
         raise ValueError(f"Unsupported bug tracker: {tracker_type}")
-    return connector_cls()
+    return connector_cls(credentials=credentials)
 
 
-async def file_bugs(issues: list[Issue], tracker_type: BugTrackerType) -> list[dict]:
+async def file_bugs(
+    issues: list[Issue],
+    tracker_type: BugTrackerType,
+    credentials: dict | None = None,
+) -> list[dict]:
     if not issues:
         return []
-    tracker = get_tracker(tracker_type)
+    tracker = get_tracker(tracker_type, credentials)
     connected = await tracker.test_connection()
     if not connected:
         raise ConnectionError(f"Cannot connect to {tracker_type.value}. Check credentials.")

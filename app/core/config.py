@@ -35,6 +35,15 @@ class Settings(BaseSettings):
     linear_api_key: str = ""
     linear_team_id: str = ""
 
+    # JWT / Auth
+    jwt_secret_key: str = "change-this-secret-key"
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 30
+    jwt_refresh_token_expire_days: int = 7
+
+    # Database
+    database_url: str = "sqlite+aiosqlite:///reporat.db"
+
     # Server
     scan_temp_dir: str = "/tmp/reporat"
     log_level: str = "INFO"

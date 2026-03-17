@@ -1,10 +1,11 @@
+import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, Optional
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.models import ScanRequest, ScanResult, ScanStatus, Issue, Severity
 from app.services.repo_cloner import clone_repo, cleanup_repo
 from app.services.test_runner import run_generated_tests
-from app.services.bug_reporter import file_bugs
 from app.analyzers.static import run_static_analysis
 from app.analyzers.ai_testgen import generate_tests, analyze_failure
 from anthropic import AsyncAnthropic
@@ -12,7 +13,7 @@ from app.core.config import settings
 
 logger = logging.getLogger("reporat")
 
-# In-memory scan store
+# In-memory scan store (kept for backward compat and WebSocket updates)
 scan_store: dict[str, ScanResult] = {}
 
 # Status update callbacks for WebSocket
@@ -36,7 +37,34 @@ async def _notify(scan_id: str, data: dict):
             pass
 
 
-async def run_scan(request: ScanRequest, scan_id: Optional[str] = None) -> ScanResult:
+async def _save_scan_to_db(scan: ScanResult, db: AsyncSession | None, scan_record_id: str | None):
+    """Persist scan results to database if db session is available."""
+    if not db or not scan_record_id:
+        return
+    try:
+        from app.core.db_models import ScanRecord
+        from sqlalchemy import update
+
+        values = {
+            "status": scan.status.value,
+            "summary_json": json.dumps(scan.summary),
+            "issues_json": json.dumps([i.model_dump() for i in scan.issues]),
+            "test_results_json": json.dumps([t.model_dump() for t in scan.test_results]),
+            "error": scan.error,
+            "completed_at": scan.completed_at,
+        }
+        await db.execute(update(ScanRecord).where(ScanRecord.id == scan_record_id).values(**values))
+        await db.commit()
+    except Exception as e:
+        logger.error(f"[{scan.scan_id}] Failed to save scan to DB: {e}")
+
+
+async def run_scan(
+    request: ScanRequest,
+    scan_id: Optional[str] = None,
+    db: AsyncSession | None = None,
+    scan_record_id: str | None = None,
+) -> ScanResult:
     scan = ScanResult(repo_url=request.repo_url)
     if scan_id:
         scan.scan_id = scan_id
@@ -100,22 +128,10 @@ async def run_scan(request: ScanRequest, scan_id: Optional[str] = None) -> ScanR
                     "tests_failed": len(failed),
                 })
 
-        # Step 5: File Bugs
-        if request.file_bugs and scan.issues:
-            scan.status = ScanStatus.FILING_BUGS
-            await _notify(scan.scan_id, {
-                "status": "filing_bugs",
-                "message": f"Filing {len(scan.issues)} bugs to {request.bug_tracker.value}...",
-            })
-            try:
-                filed = await file_bugs(scan.issues, request.bug_tracker)
-                scan.bugs_filed = filed
-            except Exception as e:
-                logger.error(f"[{scan.scan_id}] Bug filing failed: {e}")
-                scan.error = f"Bug filing failed: {e}"
+        # Bug filing removed from pipeline — now triggered on-demand via API
 
         scan.status = ScanStatus.COMPLETED
-        scan.completed_at = datetime.utcnow()
+        scan.completed_at = datetime.now(timezone.utc)
         await _notify(scan.scan_id, {
             "status": "completed",
             "message": "Scan completed",
@@ -125,12 +141,13 @@ async def run_scan(request: ScanRequest, scan_id: Optional[str] = None) -> ScanR
     except Exception as e:
         scan.status = ScanStatus.FAILED
         scan.error = str(e)
-        scan.completed_at = datetime.utcnow()
+        scan.completed_at = datetime.now(timezone.utc)
         await _notify(scan.scan_id, {"status": "failed", "message": str(e)})
         logger.error(f"[{scan.scan_id}] Scan failed: {e}")
     finally:
         cleanup_repo(scan.scan_id)
         unregister_callback(scan.scan_id)
+        await _save_scan_to_db(scan, db, scan_record_id)
 
     return scan
 

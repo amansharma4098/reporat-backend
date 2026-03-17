@@ -15,9 +15,13 @@ SEVERITY_TO_PRIORITY = {
 class LinearConnector(BugTrackerConnector):
     GRAPHQL_URL = "https://api.linear.app/graphql"
 
-    def __init__(self):
-        self.api_key = settings.linear_api_key
-        self.team_id = settings.linear_team_id
+    def __init__(self, credentials: dict | None = None):
+        if credentials:
+            self.api_key = credentials["api_key"]
+            self.team_id = credentials["team_id"]
+        else:
+            self.api_key = settings.linear_api_key
+            self.team_id = settings.linear_team_id
 
     def _headers(self) -> dict:
         return {"Authorization": self.api_key, "Content-Type": "application/json"}

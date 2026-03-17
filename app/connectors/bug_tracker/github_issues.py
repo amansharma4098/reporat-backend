@@ -13,9 +13,13 @@ SEVERITY_LABELS = {
 
 
 class GitHubIssuesConnector(BugTrackerConnector):
-    def __init__(self):
-        self.pat = settings.github_issues_pat
-        self.repo = settings.github_issues_repo
+    def __init__(self, credentials: dict | None = None):
+        if credentials:
+            self.pat = credentials["pat"]
+            self.repo = credentials["repo"]
+        else:
+            self.pat = settings.github_issues_pat
+            self.repo = settings.github_issues_repo
         self.base_url = f"https://api.github.com/repos/{self.repo}"
 
     def _headers(self) -> dict:

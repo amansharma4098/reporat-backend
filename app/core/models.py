@@ -47,7 +47,7 @@ class ScanRequest(BaseModel):
     bug_tracker: BugTrackerType = BugTrackerType.GITHUB_ISSUES
     run_static_analysis: bool = True
     run_ai_tests: bool = True
-    file_bugs: bool = True
+    file_bugs: bool = False
     include_patterns: list[str] = Field(default_factory=lambda: ["*.py", "*.js", "*.ts"])
     exclude_patterns: list[str] = Field(default_factory=lambda: ["node_modules", ".git", "__pycache__", "venv"])
 
@@ -55,6 +55,17 @@ class ScanRequest(BaseModel):
 class ConnectorConfig(BaseModel):
     type: str
     credentials: dict
+
+
+class FileBugsRequest(BaseModel):
+    tracker_type: BugTrackerType
+    credentials: dict
+    issue_ids: list[str] = Field(default_factory=list)
+
+
+class FileBugsSavedRequest(BaseModel):
+    tracker_type: BugTrackerType
+    issue_ids: list[str] = Field(default_factory=list)
 
 
 # --- Issue / Bug Models ---

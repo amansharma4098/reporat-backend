@@ -13,10 +13,15 @@ SEVERITY_TO_PRIORITY = {
 
 
 class JiraConnector(BugTrackerConnector):
-    def __init__(self):
-        self.base_url = settings.jira_url.rstrip("/")
-        self.auth = (settings.jira_email, settings.jira_api_token)
-        self.project_key = settings.jira_project_key
+    def __init__(self, credentials: dict | None = None):
+        if credentials:
+            self.base_url = credentials["url"].rstrip("/")
+            self.auth = (credentials["email"], credentials["api_token"])
+            self.project_key = credentials["project_key"]
+        else:
+            self.base_url = settings.jira_url.rstrip("/")
+            self.auth = (settings.jira_email, settings.jira_api_token)
+            self.project_key = settings.jira_project_key
 
     def _headers(self) -> dict:
         return {"Content-Type": "application/json", "Accept": "application/json"}

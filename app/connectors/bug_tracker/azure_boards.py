@@ -14,10 +14,15 @@ SEVERITY_MAP = {
 
 
 class AzureBoardsConnector(BugTrackerConnector):
-    def __init__(self):
-        self.org = settings.azure_boards_org
-        self.project = settings.azure_boards_project
-        self.pat = settings.azure_boards_pat
+    def __init__(self, credentials: dict | None = None):
+        if credentials:
+            self.org = credentials["org"]
+            self.project = credentials["project"]
+            self.pat = credentials["pat"]
+        else:
+            self.org = settings.azure_boards_org
+            self.project = settings.azure_boards_project
+            self.pat = settings.azure_boards_pat
         self.base_url = f"https://dev.azure.com/{self.org}/{self.project}/_apis"
 
     def _headers(self) -> dict:
