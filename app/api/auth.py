@@ -1,6 +1,5 @@
 import re
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -11,10 +10,9 @@ from app.core.security import (
     hash_password, verify_password,
     create_access_token, create_refresh_token, decode_token,
 )
+from app.api.deps import get_current_user, get_current_tenant
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
-
-_bearer_scheme = HTTPBearer()
 
 
 # --- Request / Response Schemas ---
@@ -46,49 +44,6 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
-# --- Auth dependencies ---
-
-async def _extract_token(
-    credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
-) -> str:
-    return credentials.credentials
-
-
-async def get_current_user(
-    db: AsyncSession = Depends(get_db),
-    token: str = Depends(_extract_token),
-) -> dict:
-    try:
-        payload = decode_token(token)
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    if payload.get("type") != "access":
-        raise HTTPException(status_code=401, detail="Invalid token type")
-
-    user_id = payload.get("sub")
-    tenant_id = payload.get("tenant_id")
-    role = payload.get("role")
-
-    result = await db.execute(select(User).where(User.id == user_id, User.is_active == True))
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found or inactive")
-
-    return {"user": user, "tenant_id": tenant_id, "role": role, "db": db}
-
-
-async def get_current_tenant(current: dict = Depends(get_current_user)) -> dict:
-    if not current["tenant_id"]:
-        raise HTTPException(status_code=400, detail="No tenant context in token")
-    db = current["db"]
-    result = await db.execute(select(Tenant).where(Tenant.id == current["tenant_id"]))
-    tenant = result.scalar_one_or_none()
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-    current["tenant"] = tenant
-    return current
-
-
 # --- Helpers ---
 
 def _slugify(name: str) -> str:
@@ -97,7 +52,7 @@ def _slugify(name: str) -> str:
 
 # --- Endpoints ---
 
-@router.post("/signup", response_model=TokenResponse)
+@router.post("/signup")
 async def signup(req: SignupRequest, db: AsyncSession = Depends(get_db)):
     existing = await db.execute(select(User).where(User.email == req.email))
     if existing.scalar_one_or_none():
@@ -121,13 +76,16 @@ async def signup(req: SignupRequest, db: AsyncSession = Depends(get_db)):
     await db.commit()
 
     token_data = {"sub": user.id, "tenant_id": tenant.id, "role": "owner"}
-    return TokenResponse(
-        access_token=create_access_token(token_data),
-        refresh_token=create_refresh_token(token_data),
-    )
+    return {
+        "access_token": create_access_token(token_data),
+        "refresh_token": create_refresh_token(token_data),
+        "token_type": "bearer",
+        "user": {"id": user.id, "email": user.email, "name": user.name},
+        "tenant": {"id": tenant.id, "name": tenant.name, "slug": tenant.slug},
+    }
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login")
 async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == req.email))
     user = result.scalar_one_or_none()
@@ -143,14 +101,21 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
     if not membership:
         raise HTTPException(status_code=403, detail="User has no tenant membership")
 
+    # Get tenant info
+    tenant_result = await db.execute(select(Tenant).where(Tenant.id == membership.tenant_id))
+    tenant = tenant_result.scalar_one_or_none()
+
     token_data = {"sub": user.id, "tenant_id": membership.tenant_id, "role": membership.role}
-    return TokenResponse(
-        access_token=create_access_token(token_data),
-        refresh_token=create_refresh_token(token_data),
-    )
+    return {
+        "access_token": create_access_token(token_data),
+        "refresh_token": create_refresh_token(token_data),
+        "token_type": "bearer",
+        "user": {"id": user.id, "email": user.email, "name": user.name},
+        "tenant": {"id": tenant.id, "name": tenant.name, "slug": tenant.slug} if tenant else None,
+    }
 
 
-@router.post("/refresh", response_model=TokenResponse)
+@router.post("/refresh")
 async def refresh(req: RefreshRequest, db: AsyncSession = Depends(get_db)):
     try:
         payload = decode_token(req.refresh_token)
@@ -170,10 +135,11 @@ async def refresh(req: RefreshRequest, db: AsyncSession = Depends(get_db)):
         "tenant_id": payload.get("tenant_id"),
         "role": payload.get("role"),
     }
-    return TokenResponse(
-        access_token=create_access_token(token_data),
-        refresh_token=create_refresh_token(token_data),
-    )
+    return {
+        "access_token": create_access_token(token_data),
+        "refresh_token": create_refresh_token(token_data),
+        "token_type": "bearer",
+    }
 
 
 @router.get("/me")

@@ -21,7 +21,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-origins = [o.strip() for o in settings.cors_origins.split(",")]
+# Always include these origins + whatever CORS_ORIGINS env provides
+_hardcoded_origins = [
+    "https://reporat-frontend.amansharma4098.workers.dev",
+    "http://localhost:3000",
+]
+_env_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+origins = list(dict.fromkeys(_hardcoded_origins + _env_origins))
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,

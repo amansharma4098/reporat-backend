@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.core.models import BugTrackerType
 from app.core.database import get_db
 from app.core.db_models import ConnectorConfig as ConnectorConfigDB
-from app.api.auth import get_current_tenant
+from app.api.deps import get_current_tenant
 from app.services.bug_reporter import get_tracker
 
 router = APIRouter(prefix="/api/connectors", tags=["connectors"])

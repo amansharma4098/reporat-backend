@@ -9,7 +9,7 @@ from app.core.models import ScanRequest, FileBugsRequest, FileBugsSavedRequest, 
 from app.core.pipeline import run_scan, get_scan, get_all_scans, scan_store, register_callback
 from app.core.database import get_db, async_session
 from app.core.db_models import ScanRecord, ConnectorConfig as ConnectorConfigDB
-from app.api.auth import get_current_tenant
+from app.api.deps import get_current_tenant
 from app.services.bug_reporter import file_bugs, get_tracker
 
 router = APIRouter(prefix="/api/scan", tags=["scan"])

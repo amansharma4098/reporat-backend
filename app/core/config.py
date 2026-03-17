@@ -42,9 +42,10 @@ class Settings(BaseSettings):
     jwt_refresh_token_expire_days: int = 7
 
     # Database
-    database_url: str = "sqlite+aiosqlite:///reporat.db"
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/reporat"
 
     # Server
+    port: int = 8000
     scan_temp_dir: str = "/tmp/reporat"
     log_level: str = "INFO"
     cors_origins: str = "http://localhost:3000"
