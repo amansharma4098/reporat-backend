@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.scan import router as scan_router
 from app.api.connectors import router as connectors_router
 from app.api.auth import router as auth_router
+from app.api.team import router as team_router
 from app.core.config import settings
 from app.core.database import create_tables
 
@@ -40,6 +41,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(scan_router)
 app.include_router(connectors_router)
+app.include_router(team_router)
 
 
 @app.get("/")
