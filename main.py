@@ -1,3 +1,5 @@
+import asyncio
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -5,14 +7,21 @@ from app.api.scan import router as scan_router
 from app.api.connectors import router as connectors_router
 from app.api.auth import router as auth_router
 from app.api.team import router as team_router
+from app.api.webhooks import router as webhooks_router
+from app.api.webhook_config import router as webhook_config_router
+from app.api.notifications import router as notifications_router
+from app.api.schedules import router as schedules_router
 from app.core.config import settings
 from app.core.database import create_tables
+from app.services.scheduler import start_scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await create_tables()
+    scheduler_task = asyncio.create_task(start_scheduler())
     yield
+    scheduler_task.cancel()
 
 
 app = FastAPI(
@@ -42,6 +51,10 @@ app.include_router(auth_router)
 app.include_router(scan_router)
 app.include_router(connectors_router)
 app.include_router(team_router)
+app.include_router(webhooks_router)
+app.include_router(webhook_config_router)
+app.include_router(notifications_router)
+app.include_router(schedules_router)
 
 
 @app.get("/")
@@ -53,8 +66,6 @@ async def root():
 async def health():
     return {"status": "ok"}
 
-
-import os
 
 if __name__ == "__main__":
     import uvicorn

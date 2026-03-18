@@ -109,8 +109,68 @@ async def run_bandit(repo_path: Path) -> list[Issue]:
     return issues
 
 
+ESLINT_SEVERITY_MAP = {
+    2: Severity.HIGH,
+    1: Severity.MEDIUM,
+}
+
+
+async def run_eslint(repo_path: Path) -> list[Issue]:
+    """Run ESLint if package.json exists in the repo."""
+    package_json = repo_path / "package.json"
+    if not package_json.exists():
+        return []
+
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(None, lambda: subprocess.run(
+            ["npx", "eslint", ".", "--format", "json", "--no-error-on-unmatched-pattern"],
+            capture_output=True, text=True, cwd=str(repo_path), timeout=120,
+        ))
+    except FileNotFoundError:
+        print("[Static] npx/eslint not found, skipping ESLint")
+        return []
+    except subprocess.TimeoutExpired:
+        print("[Static] ESLint timed out")
+        return []
+    except Exception as e:
+        print(f"[Static] ESLint subprocess error: {e}")
+        return []
+
+    if result is None or not result.stdout or not result.stdout.strip():
+        return []
+
+    issues = []
+    try:
+        files = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError):
+        print("[Static] ESLint JSON parse error")
+        return []
+
+    for file_entry in files:
+        file_path = file_entry.get("filePath", "unknown")
+        try:
+            file_path = str(Path(file_path).relative_to(repo_path))
+        except ValueError:
+            pass
+
+        for msg in file_entry.get("messages", []):
+            severity = ESLINT_SEVERITY_MAP.get(msg.get("severity", 1), Severity.MEDIUM)
+            rule_id = msg.get("ruleId") or "eslint"
+            issues.append(Issue(
+                title=f"[ESLint {rule_id}] {msg.get('message', 'Lint issue')}",
+                description=f"**Rule:** {rule_id}\n**Message:** {msg.get('message', '')}",
+                file_path=file_path,
+                line_number=msg.get("line"),
+                severity=severity,
+                source="static_analysis",
+                raw_output=json.dumps(msg, indent=2),
+            ))
+    return issues
+
+
 async def run_static_analysis(repo_path: Path) -> list[Issue]:
-    ruff_issues, bandit_issues = await asyncio.gather(
-        run_ruff(repo_path), run_bandit(repo_path)
+    ruff_issues, bandit_issues, eslint_issues = await asyncio.gather(
+        run_ruff(repo_path), run_bandit(repo_path), run_eslint(repo_path)
     )
-    return (ruff_issues or []) + (bandit_issues or [])
+    return (ruff_issues or []) + (bandit_issues or []) + (eslint_issues or [])

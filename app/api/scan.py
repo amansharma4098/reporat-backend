@@ -5,7 +5,10 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, WebSocket, WebSoc
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 
+from fastapi.responses import Response
 from app.core.models import ScanRequest, FileBugsRequest, FileBugsSavedRequest, Issue, BugTrackerType
+from app.services.scan_diff import compute_diff
+from app.services.report_generator import generate_pdf
 from app.core.pipeline import run_scan, get_scan, get_all_scans, scan_store, register_callback
 from app.core.database import get_db, async_session
 from app.core.db_models import ScanRecord, ConnectorConfig as ConnectorConfigDB
@@ -327,6 +330,95 @@ async def delete_all_scans(all: bool = False, current: dict = Depends(get_curren
         scan_store.pop(sid, None)
 
     return {"message": f"{len(scan_ids)} scans deleted"}
+
+
+@router.get("/{scan_id}/diff")
+async def get_scan_diff(scan_id: str, current: dict = Depends(get_current_tenant)):
+    """Compare current scan with previous scan for the same repo."""
+    db: AsyncSession = current["db"]
+    tenant_id = current["tenant_id"]
+
+    result = await db.execute(
+        select(ScanRecord).where(ScanRecord.id == scan_id, ScanRecord.tenant_id == tenant_id)
+    )
+    record = result.scalar_one_or_none()
+    if not record:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    current_issues = _get_issues(scan_id, record)
+
+    # Find previous completed scan for same repo
+    prev_result = await db.execute(
+        select(ScanRecord)
+        .where(
+            ScanRecord.tenant_id == tenant_id,
+            ScanRecord.repo_url == record.repo_url,
+            ScanRecord.status == "completed",
+            ScanRecord.id != scan_id,
+            ScanRecord.created_at < record.created_at,
+        )
+        .order_by(ScanRecord.created_at.desc())
+        .limit(1)
+    )
+    prev_record = prev_result.scalar_one_or_none()
+
+    if prev_record:
+        previous_issues = _get_issues(prev_record.id, prev_record)
+    else:
+        previous_issues = []
+
+    return compute_diff(current_issues, previous_issues)
+
+
+@router.get("/{scan_id}/report")
+async def get_scan_report(scan_id: str, current: dict = Depends(get_current_tenant)):
+    """Generate and return a PDF report for the scan."""
+    db: AsyncSession = current["db"]
+    tenant_id = current["tenant_id"]
+
+    result = await db.execute(
+        select(ScanRecord).where(ScanRecord.id == scan_id, ScanRecord.tenant_id == tenant_id)
+    )
+    record = result.scalar_one_or_none()
+    if not record:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    # Build scan data dict
+    def _safe_json(val, default):
+        if not val:
+            return default
+        try:
+            return json.loads(val)
+        except (json.JSONDecodeError, TypeError):
+            return default
+
+    scan = scan_store.get(scan_id)
+    if scan:
+        scan_data = {
+            "summary": scan.summary,
+            "issues": [i.model_dump() for i in scan.issues],
+        }
+    else:
+        scan_data = {
+            "summary": _safe_json(record.summary_json, {
+                "repo_url": record.repo_url,
+                "status": record.status,
+                "started_at": record.created_at.isoformat() if record.created_at else "N/A",
+                "completed_at": record.completed_at.isoformat() if record.completed_at else "N/A",
+                "total_issues": 0,
+                "by_severity": {},
+                "tests_passed": 0,
+                "tests_failed": 0,
+            }),
+            "issues": _safe_json(record.issues_json, []),
+        }
+
+    pdf_bytes = generate_pdf(scan_data)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=reporat-scan-{scan_id[:8]}.pdf"},
+    )
 
 
 def _get_issues(scan_id: str, record: ScanRecord) -> list[Issue]:

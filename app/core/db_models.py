@@ -1,6 +1,6 @@
 import uuid
 from sqlalchemy import (
-    Column, String, Boolean, DateTime, ForeignKey, Text, Enum as SAEnum, func
+    Column, String, Boolean, DateTime, ForeignKey, Integer, Text, Enum as SAEnum, func
 )
 from sqlalchemy.orm import relationship
 from app.core.database import Base
@@ -85,3 +85,48 @@ class ConnectorConfig(Base):
 
     tenant = relationship("Tenant")
     user = relationship("User")
+
+
+class WebhookConfig(Base):
+    __tablename__ = "webhook_configs"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False)
+    source = Column(String, nullable=False)  # github, gitlab, azure_devops
+    secret = Column(String, nullable=False)
+    auto_scan = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    tenant = relationship("Tenant")
+
+
+class NotificationConfig(Base):
+    __tablename__ = "notification_configs"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False)
+    type = Column(String, nullable=False)  # slack, discord
+    webhook_url = Column(String, nullable=False)
+    enabled = Column(Boolean, default=True)
+    notify_on = Column(String, default="all")  # all, failed, critical_only
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    tenant = relationship("Tenant")
+
+
+class ScanSchedule(Base):
+    __tablename__ = "scan_schedules"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False)
+    repo_url = Column(String, nullable=False)
+    branch = Column(String, default="main")
+    repo_source = Column(String, default="github")
+    cron_expression = Column(String, nullable=True)
+    interval_hours = Column(Integer, nullable=True)
+    enabled = Column(Boolean, default=True)
+    last_run = Column(DateTime(timezone=True), nullable=True)
+    next_run = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    tenant = relationship("Tenant")

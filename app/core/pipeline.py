@@ -38,6 +38,50 @@ async def _notify(scan_id: str, data: dict):
             pass
 
 
+async def _send_notifications(scan: ScanResult, db: AsyncSession | None, scan_record_id: str | None):
+    """Send notifications after scan completes. Never fail the scan."""
+    if not db or not scan_record_id:
+        return
+    try:
+        from app.core.db_models import ScanRecord, NotificationConfig
+        from app.services.notifications import send_notification
+        from sqlalchemy import select
+
+        # Get tenant_id from scan record
+        rec_result = await db.execute(
+            select(ScanRecord.tenant_id).where(ScanRecord.id == scan_record_id)
+        )
+        row = rec_result.first()
+        if not row:
+            return
+        tenant_id = row[0]
+
+        # Get enabled notification configs
+        result = await db.execute(
+            select(NotificationConfig).where(
+                NotificationConfig.tenant_id == tenant_id,
+                NotificationConfig.enabled == True,
+            )
+        )
+        configs = result.scalars().all()
+
+        scan_data = {"summary": scan.summary}
+        for config in configs:
+            # Check notify_on filter
+            if config.notify_on == "failed" and scan.status.value != "failed":
+                continue
+            if config.notify_on == "critical_only":
+                has_critical = any(i.severity.value == "critical" for i in scan.issues)
+                if not has_critical:
+                    continue
+            try:
+                await send_notification(config.type, config.webhook_url, scan_data)
+            except Exception as e:
+                logger.warning(f"[{scan.scan_id}] Notification ({config.type}) failed: {e}")
+    except Exception as e:
+        logger.warning(f"[{scan.scan_id}] Notification dispatch error: {e}")
+
+
 async def _save_scan_to_db(scan: ScanResult, db: AsyncSession | None, scan_record_id: str | None):
     """Persist scan results to database if db session is available."""
     if not db or not scan_record_id:
@@ -181,6 +225,7 @@ async def run_scan(
         cleanup_repo(scan.scan_id)
         unregister_callback(scan.scan_id)
         await _save_scan_to_db(scan, db, scan_record_id)
+        await _send_notifications(scan, db, scan_record_id)
 
     return scan
 
