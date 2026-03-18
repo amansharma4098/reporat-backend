@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.database import get_db
 from app.core.db_models import User, Tenant, TenantMember
@@ -54,6 +54,13 @@ def _slugify(name: str) -> str:
 
 # --- Endpoints ---
 
+@router.get("/tenants")
+async def list_tenants(db: AsyncSession = Depends(get_db)):
+    """Public endpoint to list all tenants."""
+    result = await db.execute(select(Tenant.name, Tenant.slug))
+    return {"tenants": [{"name": r.name, "slug": r.slug} for r in result.all()]}
+
+
 @router.get("/tenant-check")
 async def tenant_check(name: str, db: AsyncSession = Depends(get_db)):
     """Public endpoint to check if a tenant exists by name or slug."""
@@ -81,8 +88,13 @@ async def signup(req: SignupRequest, db: AsyncSession = Depends(get_db)):
     await db.flush()
 
     if req.join_tenant_slug:
-        # Join existing tenant
-        result = await db.execute(select(Tenant).where(Tenant.slug == req.join_tenant_slug))
+        # Join existing tenant — match by slug or name, case-insensitive
+        slug_input = req.join_tenant_slug.lower().strip()
+        result = await db.execute(
+            select(Tenant).where(
+                (Tenant.slug == slug_input) | (func.lower(Tenant.name) == slug_input)
+            )
+        )
         tenant = result.scalar_one_or_none()
         if not tenant:
             raise HTTPException(status_code=404, detail="Organization not found with that code")
