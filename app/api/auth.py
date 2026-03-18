@@ -1,5 +1,6 @@
 import re
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -21,7 +22,8 @@ class SignupRequest(BaseModel):
     email: str
     password: str
     name: str
-    tenant_name: str
+    tenant_name: str | None = None
+    join_tenant_slug: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -52,30 +54,62 @@ def _slugify(name: str) -> str:
 
 # --- Endpoints ---
 
+@router.get("/tenant-check")
+async def tenant_check(name: str, db: AsyncSession = Depends(get_db)):
+    """Public endpoint to check if a tenant exists by name or slug."""
+    slug = _slugify(name)
+    result = await db.execute(
+        select(Tenant).where((Tenant.slug == slug) | (Tenant.name == name))
+    )
+    tenant = result.scalar_one_or_none()
+    if tenant:
+        return {"exists": True, "slug": tenant.slug, "name": tenant.name}
+    return {"exists": False}
+
+
 @router.post("/signup")
 async def signup(req: SignupRequest, db: AsyncSession = Depends(get_db)):
+    if not req.tenant_name and not req.join_tenant_slug:
+        raise HTTPException(status_code=400, detail="Provide either tenant_name or join_tenant_slug")
+
     existing = await db.execute(select(User).where(User.email == req.email))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="An account with this email already exists. Please sign in.")
-
-    slug = _slugify(req.tenant_name)
-    existing_tenant = await db.execute(select(Tenant).where(Tenant.slug == slug))
-    if existing_tenant.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="Tenant name already taken")
 
     user = User(email=req.email, name=req.name, password_hash=hash_password(req.password))
     db.add(user)
     await db.flush()
 
-    tenant = Tenant(name=req.tenant_name, slug=slug, owner_id=user.id)
-    db.add(tenant)
-    await db.flush()
+    if req.join_tenant_slug:
+        # Join existing tenant
+        result = await db.execute(select(Tenant).where(Tenant.slug == req.join_tenant_slug))
+        tenant = result.scalar_one_or_none()
+        if not tenant:
+            raise HTTPException(status_code=404, detail="Organization not found with that code")
+        role = "member"
+    else:
+        # Create new tenant
+        slug = _slugify(req.tenant_name)
+        result = await db.execute(select(Tenant).where(Tenant.slug == slug))
+        existing_tenant = result.scalar_one_or_none()
+        if existing_tenant:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "detail": "Organization already exists. Use the organization code to join it.",
+                    "slug": slug,
+                },
+            )
+        tenant = Tenant(name=req.tenant_name, slug=slug, owner_id=user.id)
+        db.add(tenant)
+        await db.flush()
+        role = "owner"
 
-    membership = TenantMember(tenant_id=tenant.id, user_id=user.id, role="owner")
+    membership = TenantMember(tenant_id=tenant.id, user_id=user.id, role=role)
     db.add(membership)
     await db.commit()
 
-    token_data = {"sub": user.id, "tenant_id": tenant.id, "role": "owner"}
+    token_data = {"sub": user.id, "tenant_id": tenant.id, "role": role}
     return {
         "access_token": create_access_token(token_data),
         "refresh_token": create_refresh_token(token_data),
