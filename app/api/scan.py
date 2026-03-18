@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 
 from app.core.models import ScanRequest, FileBugsRequest, FileBugsSavedRequest, Issue, BugTrackerType
 from app.core.pipeline import run_scan, get_scan, get_all_scans, scan_store, register_callback
@@ -282,6 +282,51 @@ async def file_bugs_saved(
         scan.bugs_filed.extend(filed)
 
     return {"filed": len(filed), "bugs": filed}
+
+
+@router.delete("/{scan_id}")
+async def delete_scan(scan_id: str, current: dict = Depends(get_current_tenant)):
+    """Delete a single scan by ID."""
+    db: AsyncSession = current["db"]
+    tenant_id = current["tenant_id"]
+
+    result = await db.execute(
+        select(ScanRecord).where(ScanRecord.id == scan_id, ScanRecord.tenant_id == tenant_id)
+    )
+    record = result.scalar_one_or_none()
+    if not record:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    await db.delete(record)
+    await db.commit()
+    scan_store.pop(scan_id, None)
+    return {"message": "Scan deleted"}
+
+
+@router.delete("")
+async def delete_all_scans(all: bool = False, current: dict = Depends(get_current_tenant)):
+    """Delete all scans for the current tenant when all=true."""
+    if not all:
+        raise HTTPException(status_code=400, detail="Pass ?all=true to delete all scans")
+
+    db: AsyncSession = current["db"]
+    tenant_id = current["tenant_id"]
+
+    # Get IDs first to clean up in-memory store
+    result = await db.execute(
+        select(ScanRecord.id).where(ScanRecord.tenant_id == tenant_id)
+    )
+    scan_ids = [row[0] for row in result.all()]
+
+    await db.execute(
+        delete(ScanRecord).where(ScanRecord.tenant_id == tenant_id)
+    )
+    await db.commit()
+
+    for sid in scan_ids:
+        scan_store.pop(sid, None)
+
+    return {"message": f"{len(scan_ids)} scans deleted"}
 
 
 def _get_issues(scan_id: str, record: ScanRecord) -> list[Issue]:
