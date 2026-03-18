@@ -114,6 +114,21 @@ class NotificationConfig(Base):
     tenant = relationship("Tenant")
 
 
+class PerformanceTestResult(Base):
+    __tablename__ = "performance_test_results"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False)
+    type = Column(String, nullable=False)  # loadtest, frontend
+    target_url = Column(String, nullable=False)
+    results_json = Column(Text, nullable=True)
+    status = Column(String, default="pending")  # pending, running, completed, failed
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    tenant = relationship("Tenant")
+
+
 class ScanSchedule(Base):
     __tablename__ = "scan_schedules"
 

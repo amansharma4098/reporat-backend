@@ -150,6 +150,44 @@ async def run_scan(
             })
             print(f"[{scan.scan_id}] Step 2 complete: {len(static_issues) if static_issues else 0} issues found")
 
+        # Step 2b: Performance & DB analysis
+        print(f"[{scan.scan_id}] Step 2b: Running performance/DB analysis...")
+        from app.analyzers.db_analyzer import analyze_code_for_db_issues
+        from app.analyzers.code_profiler import analyze_code_for_performance
+        perf_db_count = 0
+        try:
+            for py_file in repo_path.rglob("*.py"):
+                try:
+                    source = py_file.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    continue
+                rel_path = str(py_file.relative_to(repo_path))
+                db_issues = analyze_code_for_db_issues(source, rel_path)
+                perf_issues = analyze_code_for_performance(source, rel_path)
+                for raw in db_issues:
+                    scan.issues.append(Issue(
+                        title=raw["title"],
+                        description=raw["description"],
+                        file_path=raw["file_path"],
+                        line_number=raw.get("line_number"),
+                        severity=Severity(raw.get("severity", "medium")),
+                        source="database",
+                    ))
+                    perf_db_count += 1
+                for raw in perf_issues:
+                    scan.issues.append(Issue(
+                        title=raw["title"],
+                        description=raw["description"],
+                        file_path=raw["file_path"],
+                        line_number=raw.get("line_number"),
+                        severity=Severity(raw.get("severity", "medium")),
+                        source="performance",
+                    ))
+                    perf_db_count += 1
+        except Exception as e:
+            print(f"[{scan.scan_id}] Warning: performance/DB analysis error: {e}")
+        print(f"[{scan.scan_id}] Step 2b: {perf_db_count} performance/db issues found")
+
         # Step 3: AI Test Generation
         if request.run_ai_tests:
             print(f"[{scan.scan_id}] Step 3: Generating AI tests...")

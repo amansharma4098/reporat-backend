@@ -11,6 +11,7 @@ from app.api.webhooks import router as webhooks_router
 from app.api.webhook_config import router as webhook_config_router
 from app.api.notifications import router as notifications_router
 from app.api.schedules import router as schedules_router
+from app.api.performance import router as performance_router
 from app.core.config import settings
 from app.core.database import create_tables
 from app.services.scheduler import start_scheduler
@@ -55,6 +56,7 @@ app.include_router(webhooks_router)
 app.include_router(webhook_config_router)
 app.include_router(notifications_router)
 app.include_router(schedules_router)
+app.include_router(performance_router)
 
 
 @app.get("/")
