@@ -36,6 +36,24 @@ CONNECTOR_SCHEMAS = {
 }
 
 
+REQUIRED_FIELDS = {
+    "jira": ["url", "email", "api_token", "project_key"],
+    "azure_boards": ["org", "project", "pat"],
+    "github_issues": ["pat", "repo"],
+    "linear": ["api_key", "team_id"],
+}
+
+
+def _validate_credentials(tracker_type: str, credentials: dict):
+    required = REQUIRED_FIELDS.get(tracker_type, [])
+    missing = [f for f in required if not credentials.get(f)]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Missing required fields: {', '.join(missing)}",
+        )
+
+
 class TestCredentials(BaseModel):
     credentials: dict
 
@@ -73,13 +91,14 @@ async def list_connectors(current: dict = Depends(get_current_tenant)):
 @router.post("/{tracker_type}/test")
 async def test_connector(tracker_type: BugTrackerType, req: TestCredentials):
     """Test connection with inline credentials."""
+    _validate_credentials(tracker_type.value, req.credentials)
     try:
         tracker = get_tracker(tracker_type, req.credentials)
         connected = await tracker.test_connection()
         return {
             "type": tracker_type.value,
             "connected": connected,
-            "message": "Connection successful" if connected else "Connection failed",
+            "message": "Connection successful" if connected else "Connection failed — check token permissions and repo name",
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -92,6 +111,7 @@ async def save_connector_config(
     current: dict = Depends(get_current_tenant),
 ):
     """Save connector credentials for the tenant."""
+    _validate_credentials(tracker_type.value, req.credentials)
     db: AsyncSession = current["db"]
     tenant_id = current["tenant_id"]
     user_id = current["user"].id

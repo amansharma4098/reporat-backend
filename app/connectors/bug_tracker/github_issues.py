@@ -49,6 +49,16 @@ class GitHubIssuesConnector(BugTrackerConnector):
                 json=self._build_payload(issue),
                 headers=self._headers(),
             )
+            if resp.status_code == 403:
+                raise PermissionError(
+                    f"GitHub API returned 403 for {self.repo}. "
+                    "Ensure the token has 'issues: write' permission (fine-grained PAT) "
+                    "or 'repo' scope (classic PAT)."
+                )
+            if resp.status_code == 404:
+                raise ValueError(
+                    f"Repository '{self.repo}' not found or not accessible with the provided token."
+                )
             resp.raise_for_status()
             data = resp.json()
             return {
@@ -69,6 +79,12 @@ class GitHubIssuesConnector(BugTrackerConnector):
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(self.base_url, headers=self._headers())
+                if resp.status_code == 403:
+                    raise PermissionError(
+                        f"GitHub API returned 403. Check that your token has access to '{self.repo}'."
+                    )
                 return resp.status_code == 200
+        except PermissionError:
+            raise
         except Exception:
             return False
