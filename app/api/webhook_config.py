@@ -5,7 +5,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.core.db_models import WebhookConfig
-from app.core.config import settings
 from app.api.deps import get_current_tenant
 
 router = APIRouter(prefix="/api/webhooks/config", tags=["webhooks"])
@@ -17,9 +16,8 @@ class WebhookConfigRequest(BaseModel):
 
 
 def _build_webhook_url(source: str, tenant_slug: str, secret: str) -> str:
-    base = settings.frontend_url.rstrip("/").replace(":3000", ":8000")
     source_path = {"github": "github", "gitlab": "gitlab", "azure_devops": "azure"}.get(source, source)
-    return f"{base}/api/webhooks/{source_path}?tenant={tenant_slug}&secret={secret}"
+    return f"https://api.reporat.com/api/webhooks/{source_path}?tenant={tenant_slug}&secret={secret}"
 
 
 @router.post("")
@@ -46,24 +44,37 @@ async def save_webhook_config(req: WebhookConfigRequest, current: dict = Depends
 
     if existing:
         existing.auto_scan = req.auto_scan
-        secret = existing.secret
-    else:
-        secret = secrets.token_urlsafe(32)
-        config = WebhookConfig(
-            tenant_id=tenant_id,
-            source=req.source,
-            secret=secret,
-            auto_scan=req.auto_scan,
-        )
-        db.add(config)
+        await db.commit()
+        await db.refresh(existing)
+        return {
+            "id": existing.id,
+            "message": f"Webhook configured for {req.source}",
+            "source": req.source,
+            "secret": existing.secret,
+            "webhook_url": _build_webhook_url(req.source, tenant_slug, existing.secret),
+            "auto_scan": req.auto_scan,
+            "created_at": existing.created_at.isoformat() if existing.created_at else None,
+        }
 
+    secret = secrets.token_urlsafe(32)
+    config = WebhookConfig(
+        tenant_id=tenant_id,
+        source=req.source,
+        secret=secret,
+        auto_scan=req.auto_scan,
+    )
+    db.add(config)
     await db.commit()
+    await db.refresh(config)
 
     return {
+        "id": config.id,
         "message": f"Webhook configured for {req.source}",
-        "webhook_url": _build_webhook_url(req.source, tenant_slug, secret),
         "source": req.source,
+        "secret": secret,
+        "webhook_url": _build_webhook_url(req.source, tenant_slug, secret),
         "auto_scan": req.auto_scan,
+        "created_at": config.created_at.isoformat() if config.created_at else None,
     }
 
 
@@ -83,6 +94,7 @@ async def list_webhook_configs(current: dict = Depends(get_current_tenant)):
             {
                 "id": c.id,
                 "source": c.source,
+                "secret": c.secret,
                 "auto_scan": c.auto_scan,
                 "webhook_url": _build_webhook_url(c.source, tenant_slug, c.secret),
                 "created_at": c.created_at.isoformat() if c.created_at else None,
